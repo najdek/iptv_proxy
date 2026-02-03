@@ -394,6 +394,28 @@ function pruneExpiredStreams() {
   }
 }
 
+function refreshClientActivity() {
+  pruneExpiredStreams();
+  const activeByToken = new Map();
+  for (const stream of streams) {
+    activeByToken.set(stream.token, stream.channelUrl || "");
+  }
+  let changed = false;
+  for (const client of clients) {
+    const activeChannel = activeByToken.get(client.token) || "";
+    if (client.activeChannel !== activeChannel) {
+      client.activeChannel = activeChannel;
+      if (!activeChannel) {
+        // keep lastSeen as-is
+      }
+      changed = true;
+    }
+  }
+  if (changed) {
+    saveClients(clients);
+  }
+}
+
 function touchStream(stream) {
   stream.lastSeen = Date.now();
 }
@@ -494,7 +516,7 @@ function isHostAllowed(targetUrl) {
   }
 }
 
-function ensureLock(req, res, targetUrl = "") {
+function ensureLock(req, res) {
   const token = getClientToken(req);
   if (!token) {
     res.status(401).json({ error: "Missing client token" });
@@ -509,10 +531,6 @@ function ensureLock(req, res, targetUrl = "") {
   let stream = getStreamByToken(token);
   if (!stream) {
     if (streams.length >= getMaxStreams()) {
-      if (isPlaylistUrl(targetUrl)) {
-        sendDenyPlaylist(req, res, token);
-        return null;
-      }
       res.status(429).json({
         error: "Maximum concurrent streams reached",
         activeCount: streams.length
@@ -525,19 +543,14 @@ function ensureLock(req, res, targetUrl = "") {
       label: client.name || "client",
       clientId: client.id,
       channelKey: "",
-      channelUrl: ""
+      channelUrl: "",
+      lastSwitchAt: 0,
+      deniedChannels: new Map()
     };
     streams.push(stream);
     log("info", "Stream activated", { clientId: stream.clientId });
   }
-  if (!applyChannelLock(req, res, targetUrl, stream)) return null;
-  touchStream(stream);
-  client.lastSeen = stream.lastSeen;
-  if (isPlaylistUrl(targetUrl)) {
-    client.activeChannel = targetUrl;
-  }
-  saveClients(clients);
-  return token;
+  return { stream, client };
 }
 
 function autoAcquireLock() {
@@ -576,18 +589,46 @@ function getChannelKey(targetUrl) {
 }
 
 function applyChannelLock(req, res, targetUrl, stream) {
-  if (!targetUrl || !isPlaylistUrl(targetUrl)) {
-    return true;
-  }
+  if (!targetUrl) return true;
   const channelKey = getChannelKey(targetUrl);
   if (!channelKey) return true;
-  if (!stream.channelKey) {
-    stream.channelKey = channelKey;
-    stream.channelUrl = targetUrl;
+  const now = Date.now();
+  const SWITCH_COOLDOWN_MS = 500;
+  const REJECT_OLD_CHANNEL_MS = 3000;
+  for (const [key, until] of stream.deniedChannels.entries()) {
+    if (until <= now) {
+      stream.deniedChannels.delete(key);
+    }
+  }
+  const deniedUntil = stream.deniedChannels.get(channelKey);
+  if (deniedUntil && deniedUntil > now) {
+    return false;
+  }
+  if (isPlaylistUrl(targetUrl)) {
+    if (!stream.channelKey) {
+      stream.channelKey = channelKey;
+      stream.channelUrl = targetUrl;
+      stream.lastSwitchAt = now;
+      return true;
+    }
+    if (stream.channelKey !== channelKey) {
+      if (now - stream.lastSwitchAt < SWITCH_COOLDOWN_MS) {
+        return false;
+      }
+      stream.deniedChannels.set(stream.channelKey, now + REJECT_OLD_CHANNEL_MS);
+      stream.channelKey = channelKey;
+      stream.channelUrl = targetUrl;
+      stream.lastSwitchAt = now;
+      tokenModes.set(stream.token, "switch");
+      log("info", "Channel switched", { clientId: stream.clientId });
+      return true;
+    }
     return true;
   }
-  if (stream.channelKey !== channelKey) {
-    sendDenyPlaylist(req, res, stream.token);
+  if (!stream.channelKey) {
+    return false;
+  }
+  if (!channelKey.startsWith(stream.channelKey)) {
     return false;
   }
   return true;
@@ -767,6 +808,7 @@ app.get("/api/config", (req, res) => {
 });
 
 app.get("/api/clients", (req, res) => {
+  refreshClientActivity();
   res.json({ clients });
 });
 
@@ -891,7 +933,7 @@ app.post("/api/config", (req, res) => {
 });
 
 app.get("/api/status", (req, res) => {
-  pruneExpiredStreams();
+  refreshClientActivity();
   checkFfmpeg().then((ffmpegAvailable) => {
     res.json({
       activeCount: streams.length,
@@ -977,10 +1019,36 @@ app.get("/proxy/hls", async (req, res) => {
     res.status(400).json({ error: "Missing HLS URL" });
     return;
   }
-  if (!ensureLock(req, res, url)) return;
+  const ensured = ensureLock(req, res);
+  if (!ensured) return;
+  const { stream, client } = ensured;
+  if (!applyChannelLock(req, res, url, stream)) {
+    if (isPlaylistUrl(url)) {
+      sendDenyPlaylist(req, res, stream.token);
+      return;
+    }
+    const ok = await ensureDenyVideo();
+    if (!ok) {
+      res.status(503).json({ error: "Deny video not available (ffmpeg missing?)" });
+      return;
+    }
+    res.setHeader("Content-Type", "video/mp2t");
+    res.setHeader("Cache-Control", "no-store");
+    const denyStream = fs.createReadStream(denyVideoPath);
+    denyStream.on("error", () => res.status(500).end());
+    denyStream.pipe(res);
+    return;
+  }
+  touchStream(stream);
+  client.lastSeen = stream.lastSeen;
+  if (stream.channelUrl) {
+    client.activeChannel = stream.channelUrl;
+  }
+  saveClients(clients);
   const proxyBase = `${req.protocol}://${req.get("host")}`;
   const token = getClientToken(req);
-  const forceDiscontinuity = tokenModes.get(token) === "deny";
+  const mode = tokenModes.get(token);
+  const forceDiscontinuity = mode === "deny" || mode === "switch";
   if (forceDiscontinuity) {
     tokenModes.delete(token);
   }
