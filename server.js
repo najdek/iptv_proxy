@@ -736,15 +736,32 @@ async function proxyRequest(
   }
 
   let upstream;
-  try {
-    upstream = await fetch(targetUrl, {
-      headers: {
-        "User-Agent": "iptv-proxy/0.1",
-        "Accept": req.get("accept") || "*/*"
+  let lastError = null;
+  const headers = {
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Accept": req.get("accept") || "*/*",
+    "Connection": "keep-alive"
+  };
+  const retryStatuses = new Set([502, 503, 504]);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      upstream = await fetch(targetUrl, { headers });
+      if (upstream.ok || !retryStatuses.has(upstream.status) || attempt === 2) {
+        break;
       }
-    });
-  } catch (err) {
-    log("error", "Fetch failed", { targetUrl, error: String(err) });
+      await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
+    } catch (err) {
+      lastError = err;
+      if (attempt === 2) {
+        log("error", "Fetch failed", { targetUrl, error: String(err) });
+        res.status(502).json({ error: "Upstream fetch failed" });
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
+    }
+  }
+  if (!upstream && lastError) {
     res.status(502).json({ error: "Upstream fetch failed" });
     return;
   }
