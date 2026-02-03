@@ -22,7 +22,9 @@ const defaultConfig = {
   allowedHosts: [],
   maxStreams: 1,
   denyImageUrl: "",
-  denyImagePath: ""
+  denyImagePath: "",
+  cacheEnabled: false,
+  cacheMaxBytes: 50 * 1024 * 1024
 };
 
 let config = loadConfig();
@@ -47,6 +49,9 @@ const ffmpegState = {
   available: null,
   checkedAt: 0
 };
+const tokenModes = new Map();
+const hlsCache = new Map();
+let hlsCacheBytes = 0;
 
 app.use(express.json({ limit: "1mb" }));
 app.use((req, res, next) => {
@@ -372,6 +377,67 @@ function getMaxStreams() {
   return Math.floor(val);
 }
 
+function isCacheEnabled() {
+  return Boolean(config.cacheEnabled);
+}
+
+function getCacheMaxBytes() {
+  const val = Number(config.cacheMaxBytes);
+  if (!Number.isFinite(val) || val < 1024 * 1024) {
+    return 50 * 1024 * 1024;
+  }
+  return Math.floor(val);
+}
+
+function cacheSizeOf(entry) {
+  if (!entry) return 0;
+  if (entry.type === "text") {
+    return Buffer.byteLength(entry.body || "", "utf8");
+  }
+  if (entry.type === "buffer") {
+    return entry.body ? entry.body.length : 0;
+  }
+  return 0;
+}
+
+function pruneCache() {
+  const now = Date.now();
+  for (const [key, entry] of hlsCache) {
+    if (entry.expiresAt && entry.expiresAt <= now) {
+      hlsCacheBytes -= cacheSizeOf(entry);
+      hlsCache.delete(key);
+    }
+  }
+  const maxBytes = getCacheMaxBytes();
+  if (hlsCacheBytes <= maxBytes) return;
+  for (const [key, entry] of hlsCache) {
+    if (hlsCacheBytes <= maxBytes) break;
+    hlsCacheBytes -= cacheSizeOf(entry);
+    hlsCache.delete(key);
+  }
+}
+
+function getCacheEntry(key) {
+  const entry = hlsCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt && entry.expiresAt <= Date.now()) {
+    hlsCacheBytes -= cacheSizeOf(entry);
+    hlsCache.delete(key);
+    return null;
+  }
+  return entry;
+}
+
+function setCacheEntry(key, entry) {
+  const existing = hlsCache.get(key);
+  if (existing) {
+    hlsCacheBytes -= cacheSizeOf(existing);
+  }
+  hlsCache.set(key, entry);
+  hlsCacheBytes += cacheSizeOf(entry);
+  pruneCache();
+}
+
 function getClientId(req) {
   const headerId = req.get("x-client-id");
   const queryId = req.query.clientId;
@@ -407,7 +473,7 @@ function ensureLock(req, res, targetUrl = "") {
   if (!stream) {
     if (streams.length >= getMaxStreams()) {
       if (isPlaylistUrl(targetUrl)) {
-        sendDenyPlaylist(req, res);
+        sendDenyPlaylist(req, res, token);
         return null;
       }
       res.status(429).json({
@@ -491,37 +557,39 @@ function applyChannelLock(req, res, targetUrl, stream) {
     return true;
   }
   if (stream.channelKey !== channelKey) {
-    sendDenyPlaylist(req, res);
+    sendDenyPlaylist(req, res, stream.token);
     return false;
   }
   return true;
 }
 
-function sendDenyPlaylist(req, res) {
+function sendDenyPlaylist(req, res, token = "") {
   const base = `${req.protocol}://${req.get("host")}`;
+  const seq = Math.floor(Date.now() / 1000);
   const playlist = [
     "#EXTM3U",
     "#EXT-X-VERSION:3",
     "#EXT-X-TARGETDURATION:4",
-    "#EXT-X-MEDIA-SEQUENCE:0",
+    `#EXT-X-MEDIA-SEQUENCE:${seq}`,
     "#EXT-X-ALLOW-CACHE:NO",
-    "#EXT-X-PLAYLIST-TYPE:VOD",
     "#EXTINF:4.0,",
-    `${base}/deny/segment`,
-    "#EXT-X-ENDLIST"
+    `${base}/deny/segment`
   ].join("\n");
   res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
   res.setHeader("Cache-Control", "no-store");
   res.status(200).send(playlist);
+  if (token) {
+    tokenModes.set(token, "deny");
+  }
 }
 
-function rewritePlaylist(content, baseUrl, token, proxyBase) {
+function rewritePlaylist(content, baseUrl, token, proxyBase, { forceDiscontinuity = false } = {}) {
   const lines = content.split(/\r?\n/);
   const rewritten = lines.map((line) => {
     const trimmed = line.trim();
     if (!trimmed) return line;
     if (trimmed.startsWith("#")) {
-      return rewriteTagLine(line, baseUrl, token);
+      return rewriteTagLine(line, baseUrl, token, proxyBase);
     }
     try {
       const resolved = new URL(trimmed, baseUrl).toString();
@@ -530,6 +598,13 @@ function rewritePlaylist(content, baseUrl, token, proxyBase) {
       return line;
     }
   });
+  if (forceDiscontinuity) {
+    if (rewritten[0] && rewritten[0].trim() === "#EXTM3U") {
+      rewritten.splice(1, 0, "#EXT-X-DISCONTINUITY");
+    } else {
+      rewritten.unshift("#EXT-X-DISCONTINUITY");
+    }
+  }
   return rewritten.join("\n");
 }
 
@@ -555,10 +630,38 @@ function buildProxyUrl(targetUrl, token, proxyBase) {
   return `${proxyBase}${path}`;
 }
 
-async function proxyRequest(req, res, targetUrl, { rewrite = false, token = "", proxyBase = "" } = {}) {
+async function proxyRequest(
+  req,
+  res,
+  targetUrl,
+  { rewrite = false, token = "", proxyBase = "", forceDiscontinuity = false } = {}
+) {
   if (!isHostAllowed(targetUrl)) {
     res.status(403).json({ error: "Target host is not allowed" });
     return;
+  }
+
+  const cacheable = isCacheEnabled();
+  const looksLikePlaylist = isPlaylistUrl(targetUrl);
+  const cacheKey = targetUrl;
+  if (cacheable) {
+    const entry = getCacheEntry(cacheKey);
+    if (entry) {
+      if (entry.type === "text" && looksLikePlaylist && rewrite) {
+        const rewritten = rewritePlaylist(entry.body, entry.baseUrl, token, proxyBase, {
+          forceDiscontinuity
+        });
+        res.setHeader("Content-Type", entry.contentType || "application/vnd.apple.mpegurl");
+        res.status(200).send(rewritten);
+        return;
+      } else if (entry.type === "buffer" && !looksLikePlaylist) {
+        if (entry.contentType) {
+          res.setHeader("Content-Type", entry.contentType);
+        }
+        res.status(200).send(entry.body);
+        return;
+      }
+    }
   }
 
   let upstream;
@@ -585,7 +688,18 @@ async function proxyRequest(req, res, targetUrl, { rewrite = false, token = "", 
 
   if (rewrite && isPlaylist) {
     const text = await upstream.text();
-    const rewritten = rewritePlaylist(text, upstream.url || targetUrl, token, proxyBase);
+    if (cacheable) {
+      setCacheEntry(cacheKey, {
+        type: "text",
+        body: text,
+        contentType,
+        baseUrl: upstream.url || targetUrl,
+        expiresAt: Date.now() + 4_000
+      });
+    }
+    const rewritten = rewritePlaylist(text, upstream.url || targetUrl, token, proxyBase, {
+      forceDiscontinuity
+    });
     res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
     res.status(200).send(rewritten);
     return;
@@ -596,7 +710,18 @@ async function proxyRequest(req, res, targetUrl, { rewrite = false, token = "", 
     res.setHeader("Content-Type", contentType);
   }
   try {
-    await pipe(upstream.body, res);
+    if (cacheable && !isPlaylist) {
+      const buffer = Buffer.from(await upstream.arrayBuffer());
+      setCacheEntry(cacheKey, {
+        type: "buffer",
+        body: buffer,
+        contentType,
+        expiresAt: Date.now() + 120_000
+      });
+      res.send(buffer);
+    } else {
+      await pipe(upstream.body, res);
+    }
   } catch (err) {
     const message = String(err);
     if (message.includes("ERR_STREAM_PREMATURE_CLOSE")) {
@@ -670,8 +795,10 @@ app.post("/api/deny-video/regenerate", async (req, res) => {
 });
 
 app.post("/api/config", (req, res) => {
-  const { m3uUrl, epgUrl, allowedHosts, maxStreams, denyImageUrl } = req.body || {};
+  const { m3uUrl, epgUrl, allowedHosts, maxStreams, denyImageUrl, cacheEnabled, cacheMaxBytes } =
+    req.body || {};
   const nextMaxStreams = Number(maxStreams);
+  const nextCacheMaxBytes = Number(cacheMaxBytes);
   saveConfig({
     m3uUrl: m3uUrl || "",
     epgUrl: epgUrl || "",
@@ -679,7 +806,11 @@ app.post("/api/config", (req, res) => {
     maxStreams: Number.isFinite(nextMaxStreams) && nextMaxStreams > 0 ? Math.floor(nextMaxStreams) : config.maxStreams,
     denyImageUrl: typeof denyImageUrl === "string" ? denyImageUrl.trim() : config.denyImageUrl,
     denyImagePath:
-      typeof denyImageUrl === "string" && denyImageUrl.trim() ? "" : config.denyImagePath
+      typeof denyImageUrl === "string" && denyImageUrl.trim() ? "" : config.denyImagePath,
+    cacheEnabled: typeof cacheEnabled === "boolean" ? cacheEnabled : config.cacheEnabled,
+    cacheMaxBytes: Number.isFinite(nextCacheMaxBytes) && nextCacheMaxBytes > 0
+      ? Math.floor(nextCacheMaxBytes)
+      : config.cacheMaxBytes
   });
   log("info", "Config updated", { m3uUrl: config.m3uUrl, epgUrl: config.epgUrl });
   res.json({ ok: true, config });
@@ -693,7 +824,10 @@ app.get("/api/status", (req, res) => {
       maxStreams: getMaxStreams(),
       streams,
       ffmpegAvailable,
-      denyImagePath: config.denyImagePath || ""
+      denyImagePath: config.denyImagePath || "",
+      cacheEnabled: isCacheEnabled(),
+      cacheBytes: hlsCacheBytes,
+      cacheMaxBytes: getCacheMaxBytes()
     });
   });
 });
@@ -779,8 +913,18 @@ app.get("/proxy/hls", async (req, res) => {
   }
   if (!ensureLock(req, res, url)) return;
   const proxyBase = `${req.protocol}://${req.get("host")}`;
+  const token = getToken(req);
+  const forceDiscontinuity = tokenModes.get(token) === "deny";
+  if (forceDiscontinuity) {
+    tokenModes.delete(token);
+  }
   log("info", "Proxy hls", { url });
-  await proxyRequest(req, res, url, { rewrite: true, token: getToken(req), proxyBase });
+  await proxyRequest(req, res, url, {
+    rewrite: true,
+    token,
+    proxyBase,
+    forceDiscontinuity
+  });
 });
 
 app.listen(port, () => {

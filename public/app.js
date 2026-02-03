@@ -15,6 +15,9 @@ const els = {
   regenerateDenyVideo: document.getElementById("regenerateDenyVideo"),
   denyImagePreview: document.getElementById("denyImagePreview"),
   ffmpegStatus: document.getElementById("ffmpegStatus"),
+  cacheEnabled: document.getElementById("cacheEnabled"),
+  cacheMaxMb: document.getElementById("cacheMaxMb"),
+  cacheStatus: document.getElementById("cacheStatus"),
   saveConfig: document.getElementById("saveConfig"),
   refreshConfig: document.getElementById("refreshConfig"),
   configStatus: document.getElementById("configStatus"),
@@ -67,6 +70,8 @@ async function loadConfig() {
   els.allowedHosts.value = Array.isArray(data.allowedHosts) ? data.allowedHosts.join(", ") : "";
   els.maxStreams.value = data.maxStreams || 1;
   els.denyImageUrl.value = data.denyImageUrl || "";
+  els.cacheEnabled.checked = Boolean(data.cacheEnabled);
+  els.cacheMaxMb.value = Math.max(1, Math.round((data.cacheMaxBytes || 0) / (1024 * 1024)) || 50);
   setStatus("Config loaded.");
   refreshPreview();
 }
@@ -82,7 +87,9 @@ async function saveConfig() {
     epgUrl: els.epgUrl.value.trim(),
     allowedHosts,
     maxStreams: Number(els.maxStreams.value || 1),
-    denyImageUrl: els.denyImageUrl.value.trim()
+    denyImageUrl: els.denyImageUrl.value.trim(),
+    cacheEnabled: Boolean(els.cacheEnabled.checked),
+    cacheMaxBytes: Number(els.cacheMaxMb.value || 50) * 1024 * 1024
   };
 
   const res = await api("/api/config", {
@@ -163,6 +170,11 @@ async function refreshStatus() {
   }
   if (typeof data.ffmpegAvailable === "boolean") {
     els.ffmpegStatus.textContent = data.ffmpegAvailable ? "ffmpeg: available" : "ffmpeg: missing";
+  }
+  if (typeof data.cacheBytes === "number" && typeof data.cacheMaxBytes === "number") {
+    const mb = (data.cacheBytes / (1024 * 1024)).toFixed(1);
+    const maxMb = (data.cacheMaxBytes / (1024 * 1024)).toFixed(0);
+    els.cacheStatus.textContent = `cache: ${mb} MB / ${maxMb} MB`;
   }
 }
 

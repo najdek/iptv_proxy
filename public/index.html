@@ -37,6 +37,14 @@
             Max concurrent streams
             <input id="maxStreams" type="number" min="1" value="1" />
           </label>
+          <label class="inline">
+            <input id="cacheEnabled" type="checkbox" />
+            Enable memory cache
+          </label>
+          <label>
+            Cache size (MB)
+            <input id="cacheMaxMb" type="number" min="1" value="50" />
+          </label>
           <label>
             Over-limit image URL (optional)
             <input id="denyImageUrl" type="text" placeholder="https://example.com/too-many.png or data:image/png;base64,..." />
@@ -59,6 +67,7 @@
           </div>
           <div class="meta" id="configStatus">No config loaded yet.</div>
           <div class="meta" id="ffmpegStatus"></div>
+          <div class="meta" id="cacheStatus"></div>
         </div>
 
         <div class="card">

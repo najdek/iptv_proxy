@@ -113,6 +113,13 @@ label {
   color: var(--muted);
 }
 
+label.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
 input {
   padding: 10px 12px;
   border-radius: 12px;
