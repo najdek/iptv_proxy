@@ -30,7 +30,8 @@ const streamLock = {
   token: null,
   lastSeen: 0,
   label: "",
-  clientId: ""
+  clientId: "",
+  channelKey: ""
 };
 
 const LOCK_TTL_MS = 20_000;
@@ -111,6 +112,7 @@ function clearLock() {
   streamLock.lastSeen = 0;
   streamLock.label = "";
   streamLock.clientId = "";
+  streamLock.channelKey = "";
 }
 
 function getClientId(req) {
@@ -137,7 +139,7 @@ function isHostAllowed(targetUrl) {
   }
 }
 
-function ensureLock(req, res) {
+function ensureLock(req, res, targetUrl = "") {
   const token = getToken(req);
   if (!token) {
     res.status(401).json({ error: "Missing stream token" });
@@ -148,8 +150,10 @@ function ensureLock(req, res) {
       streamLock.token = token;
       streamLock.label = streamLock.label || "auto";
       streamLock.clientId = streamLock.clientId || getClientIdentity(req);
+      streamLock.channelKey = "";
       touchLock();
       log("info", "Stream lock re-acquired", { clientId: streamLock.clientId });
+      if (!applyChannelLock(res, targetUrl)) return null;
       return token;
     }
     res.status(409).json({
@@ -168,6 +172,7 @@ function ensureLock(req, res) {
     });
     return null;
   }
+  if (!applyChannelLock(res, targetUrl)) return null;
   touchLock();
   return token;
 }
@@ -189,6 +194,7 @@ function autoAcquireLock(req, res, { label = "auto", clientId = "" } = {}) {
   streamLock.token = token;
   streamLock.label = label;
   streamLock.clientId = clientId;
+  streamLock.channelKey = "";
   touchLock();
   log("info", "Stream lock auto-acquired", { label, clientId });
   return token;
@@ -202,6 +208,49 @@ function getClientIdentity(req) {
     return forwarded.split(",")[0].trim();
   }
   return req.ip || "";
+}
+
+function isPlaylistUrl(targetUrl) {
+  try {
+    const { pathname } = new URL(targetUrl);
+    return pathname.endsWith(".m3u8") || pathname.endsWith(".m3u");
+  } catch {
+    return false;
+  }
+}
+
+function getChannelKey(targetUrl) {
+  try {
+    const parsed = new URL(targetUrl);
+    const parts = parsed.pathname.split("/");
+    parts.pop();
+    const dir = parts.join("/") || "/";
+    return `${parsed.origin}${dir}`;
+  } catch {
+    return "";
+  }
+}
+
+function applyChannelLock(res, targetUrl) {
+  if (!targetUrl || !isPlaylistUrl(targetUrl)) {
+    return true;
+  }
+  const channelKey = getChannelKey(targetUrl);
+  if (!channelKey) return true;
+  if (!streamLock.channelKey) {
+    streamLock.channelKey = channelKey;
+    return true;
+  }
+  if (streamLock.channelKey !== channelKey) {
+    res.status(429).json({
+      error: "Another channel is active",
+      active: {
+        channelKey: streamLock.channelKey
+      }
+    });
+    return false;
+  }
+  return true;
 }
 
 function rewritePlaylist(content, baseUrl, token, proxyBase) {
@@ -398,7 +447,7 @@ app.get("/proxy/hls", async (req, res) => {
     res.status(400).json({ error: "Missing HLS URL" });
     return;
   }
-  if (!ensureLock(req, res)) return;
+  if (!ensureLock(req, res, url)) return;
   const proxyBase = `${req.protocol}://${req.get("host")}`;
   log("info", "Proxy hls", { url });
   await proxyRequest(req, res, url, { rewrite: true, token: getToken(req), proxyBase });
