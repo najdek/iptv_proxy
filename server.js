@@ -750,7 +750,17 @@ async function proxyRequest(
   }
 
   if (!upstream.ok) {
-    res.status(upstream.status).json({ error: "Upstream error" });
+    const status = upstream.status;
+    const statusText = upstream.statusText;
+    let bodyPreview = "";
+    try {
+      const text = await upstream.text();
+      bodyPreview = text.slice(0, 200);
+    } catch {
+      bodyPreview = "";
+    }
+    log("error", "Upstream error", { targetUrl, status, statusText, bodyPreview });
+    res.status(status).json({ error: "Upstream error", status, statusText });
     return;
   }
 
