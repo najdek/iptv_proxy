@@ -197,6 +197,65 @@ button:disabled {
   line-height: 1.5;
 }
 
+.logs-wide {
+  width: 100%;
+}
+
+.client-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.client-card {
+  border: 1px solid var(--stroke);
+  border-radius: 16px;
+  padding: 12px;
+  background: #fefdfc;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.client-card .row {
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.client-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.client-token {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  background: #0a0f14;
+  color: #e0e6ed;
+  padding: 6px 10px;
+  border-radius: 10px;
+  overflow-wrap: anywhere;
+}
+
+.link-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.copy-btn {
+  background: var(--accent-2);
+  color: #5a2b20;
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 12px;
+}
+
 .preview {
   margin-top: 8px;
   border-radius: 16px;

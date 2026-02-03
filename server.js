@@ -15,6 +15,7 @@ const pipe = promisify(pipeline);
 
 const dataDir = path.join(__dirname, "data");
 const configPath = path.join(dataDir, "config.json");
+const clientsPath = path.join(dataDir, "clients.json");
 
 const defaultConfig = {
   m3uUrl: "",
@@ -33,6 +34,7 @@ const logBuffer = [];
 const LOG_LIMIT = 400;
 
 const streams = [];
+let clients = loadClients();
 const LOCK_TTL_MS = 20_000;
 const denyCache = {
   url: "",
@@ -110,6 +112,35 @@ function saveConfig(nextConfig) {
   }
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
   denyVideoState.key = "";
+}
+
+function loadClients() {
+  try {
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    if (!fs.existsSync(clientsPath)) {
+      fs.writeFileSync(clientsPath, JSON.stringify({ clients: [] }, null, 2));
+      return [];
+    }
+    const raw = fs.readFileSync(clientsPath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed.clients)) {
+      return parsed.clients;
+    }
+    return [];
+  } catch (err) {
+    console.error("Failed to load clients:", err);
+    return [];
+  }
+}
+
+function saveClients(nextClients) {
+  clients = nextClients;
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+  }
+  fs.writeFileSync(clientsPath, JSON.stringify({ clients }, null, 2));
 }
 
 async function checkFfmpeg() {
@@ -304,7 +335,7 @@ async function ensureDenyVideo() {
           "-i",
           "anullsrc=channel_layout=stereo:sample_rate=48000",
           "-vf",
-          "format=yuv420p",
+          "drawtext=fontcolor=white:fontsize=48:text='Too many streams':x=60:y=220,drawtext=fontcolor=white:fontsize=24:text='Close another player to resume':x=60:y=290,format=yuv420p",
           "-r",
           "25",
           "-c:v",
@@ -444,10 +475,11 @@ function getClientId(req) {
   return headerId || queryId || "";
 }
 
-function getToken(req) {
-  const headerToken = req.get("x-stream-token");
-  const queryToken = req.query.token;
-  return headerToken || queryToken || "";
+function getClientToken(req) {
+  const headerToken = req.get("x-client-token");
+  const queryToken = req.query.client;
+  const legacyToken = req.query.token;
+  return headerToken || queryToken || legacyToken || "";
 }
 
 function isHostAllowed(targetUrl) {
@@ -463,9 +495,14 @@ function isHostAllowed(targetUrl) {
 }
 
 function ensureLock(req, res, targetUrl = "") {
-  const token = getToken(req);
+  const token = getClientToken(req);
   if (!token) {
-    res.status(401).json({ error: "Missing stream token" });
+    res.status(401).json({ error: "Missing client token" });
+    return null;
+  }
+  const client = clients.find((item) => item.token === token);
+  if (!client) {
+    res.status(403).json({ error: "Unknown client token" });
     return null;
   }
   pruneExpiredStreams();
@@ -485,34 +522,26 @@ function ensureLock(req, res, targetUrl = "") {
     stream = {
       token,
       lastSeen: Date.now(),
-      label: "auto",
-      clientId: getClientIdentity(req),
-      channelKey: ""
+      label: client.name || "client",
+      clientId: client.id,
+      channelKey: "",
+      channelUrl: ""
     };
     streams.push(stream);
-    log("info", "Stream lock re-acquired", { clientId: stream.clientId });
+    log("info", "Stream activated", { clientId: stream.clientId });
   }
   if (!applyChannelLock(req, res, targetUrl, stream)) return null;
   touchStream(stream);
+  client.lastSeen = stream.lastSeen;
+  if (isPlaylistUrl(targetUrl)) {
+    client.activeChannel = targetUrl;
+  }
+  saveClients(clients);
   return token;
 }
 
-function autoAcquireLock(req, res, { label = "auto", clientId = "" } = {}) {
-  pruneExpiredStreams();
-  if (streams.length >= getMaxStreams()) {
-    return null;
-  }
-  const token = crypto.randomUUID();
-  const stream = {
-    token,
-    lastSeen: Date.now(),
-    label,
-    clientId,
-    channelKey: ""
-  };
-  streams.push(stream);
-  log("info", "Stream lock auto-acquired", { label, clientId });
-  return token;
+function autoAcquireLock() {
+  return null;
 }
 
 function getClientIdentity(req) {
@@ -554,6 +583,7 @@ function applyChannelLock(req, res, targetUrl, stream) {
   if (!channelKey) return true;
   if (!stream.channelKey) {
     stream.channelKey = channelKey;
+    stream.channelUrl = targetUrl;
     return true;
   }
   if (stream.channelKey !== channelKey) {
@@ -624,7 +654,7 @@ function rewriteTagLine(line, baseUrl, token, proxyBase) {
 
 function buildProxyUrl(targetUrl, token, proxyBase) {
   const encoded = encodeURIComponent(targetUrl);
-  const tokenPart = token ? `&token=${encodeURIComponent(token)}` : "";
+  const tokenPart = token ? `&client=${encodeURIComponent(token)}` : "";
   const path = `/proxy/hls?u=${encoded}${tokenPart}`;
   if (!proxyBase) return path;
   return `${proxyBase}${path}`;
@@ -736,6 +766,50 @@ app.get("/api/config", (req, res) => {
   res.json(config);
 });
 
+app.get("/api/clients", (req, res) => {
+  res.json({ clients });
+});
+
+app.post("/api/clients", (req, res) => {
+  const { name } = req.body || {};
+  const client = {
+    id: crypto.randomUUID(),
+    name: typeof name === "string" && name.trim() ? name.trim() : "New client",
+    token: crypto.randomUUID(),
+    createdAt: new Date().toISOString(),
+    lastSeen: null,
+    activeChannel: ""
+  };
+  clients = [...clients, client];
+  saveClients(clients);
+  res.json({ ok: true, client });
+});
+
+app.post("/api/clients/:token/rename", (req, res) => {
+  const token = req.params.token;
+  const { name } = req.body || {};
+  const client = clients.find((item) => item.token === token);
+  if (!client) {
+    res.status(404).json({ error: "Client not found" });
+    return;
+  }
+  client.name = typeof name === "string" && name.trim() ? name.trim() : client.name;
+  saveClients(clients);
+  res.json({ ok: true, client });
+});
+
+app.delete("/api/clients/:token", (req, res) => {
+  const token = req.params.token;
+  const nextClients = clients.filter((item) => item.token !== token);
+  if (nextClients.length === clients.length) {
+    res.status(404).json({ error: "Client not found" });
+    return;
+  }
+  clients = nextClients;
+  saveClients(clients);
+  res.json({ ok: true });
+});
+
 app.post(
   "/api/deny-image",
   express.raw({ type: ["image/png", "image/jpeg"], limit: "5mb" }),
@@ -832,13 +906,6 @@ app.get("/api/status", (req, res) => {
   });
 });
 
-app.post("/api/stream/start", (req, res) => {
-  const { label = "", clientId = "" } = req.body || {};
-  const token = autoAcquireLock(req, res, { label, clientId });
-  if (!token) return;
-  res.json({ token, expiresInMs: LOCK_TTL_MS });
-});
-
 app.post("/api/stream/stop", (req, res) => {
   const { token } = req.body || {};
   if (!token) {
@@ -851,7 +918,7 @@ app.post("/api/stream/stop", (req, res) => {
     return;
   }
   streams.splice(index, 1);
-  log("info", "Stream lock released");
+  log("info", "Stream ended");
   res.json({ ok: true });
 });
 
@@ -866,16 +933,10 @@ app.get("/proxy/m3u", async (req, res) => {
     res.status(400).json({ error: "Missing m3u URL" });
     return;
   }
-  let token = getToken(req);
+  const token = getClientToken(req);
   if (!token) {
-    token = autoAcquireLock(req, res, {
-      label: "playlist",
-      clientId: getClientIdentity(req)
-    });
-    if (!token) {
-      res.status(429).json({ error: "Maximum concurrent streams reached" });
-      return;
-    }
+    res.status(401).json({ error: "Missing client token" });
+    return;
   }
   const proxyBase = `${req.protocol}://${req.get("host")}`;
   log("info", "Proxy m3u", { url });
@@ -901,6 +962,11 @@ app.get("/proxy/epg", async (req, res) => {
     res.status(400).json({ error: "Missing epg URL" });
     return;
   }
+  const token = getClientToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing client token" });
+    return;
+  }
   log("info", "Proxy epg", { url });
   await proxyRequest(req, res, url, { rewrite: false });
 });
@@ -913,7 +979,7 @@ app.get("/proxy/hls", async (req, res) => {
   }
   if (!ensureLock(req, res, url)) return;
   const proxyBase = `${req.protocol}://${req.get("host")}`;
-  const token = getToken(req);
+  const token = getClientToken(req);
   const forceDiscontinuity = tokenModes.get(token) === "deny";
   if (forceDiscontinuity) {
     tokenModes.delete(token);

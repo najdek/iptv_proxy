@@ -1,8 +1,3 @@
-const state = {
-  token: null,
-  baseUrl: ""
-};
-
 const els = {
   m3uUrl: document.getElementById("m3uUrl"),
   epgUrl: document.getElementById("epgUrl"),
@@ -21,15 +16,10 @@ const els = {
   saveConfig: document.getElementById("saveConfig"),
   refreshConfig: document.getElementById("refreshConfig"),
   configStatus: document.getElementById("configStatus"),
-  clientLabel: document.getElementById("clientLabel"),
-  clientId: document.getElementById("clientId"),
-  acquireLock: document.getElementById("acquireLock"),
-  releaseLock: document.getElementById("releaseLock"),
-  tokenValue: document.getElementById("tokenValue"),
-  lockStatus: document.getElementById("lockStatus"),
-  m3uProxy: document.getElementById("m3uProxy"),
-  epgProxy: document.getElementById("epgProxy"),
-  hlsProxy: document.getElementById("hlsProxy"),
+  refreshClients: document.getElementById("refreshClients"),
+  newClientName: document.getElementById("newClientName"),
+  createClient: document.getElementById("createClient"),
+  clientList: document.getElementById("clientList"),
   refreshLogs: document.getElementById("refreshLogs"),
   logList: document.getElementById("logList")
 };
@@ -45,21 +35,6 @@ function api(path, options = {}) {
 
 function setStatus(message) {
   els.configStatus.textContent = message;
-}
-
-function setLockStatus(message) {
-  els.lockStatus.textContent = message;
-}
-
-function renderEndpoints() {
-  const origin = window.location.origin;
-  els.m3uProxy.textContent = `${origin}/proxy/m3u`;
-  els.epgProxy.textContent = `${origin}/proxy/epg`;
-  if (state.token) {
-    els.hlsProxy.textContent = `${origin}/proxy/hls?u=...&token=${state.token}`;
-  } else {
-    els.hlsProxy.textContent = `${origin}/proxy/hls?u=...&token=YOUR_TOKEN`;
-  }
 }
 
 async function loadConfig() {
@@ -105,49 +80,6 @@ async function saveConfig() {
   refreshPreview();
 }
 
-async function acquireLock() {
-  const payload = {
-    label: els.clientLabel.value.trim(),
-    clientId: els.clientId.value.trim()
-  };
-
-  const res = await api("/api/stream/start", {
-    method: "POST",
-    body: JSON.stringify(payload)
-  });
-
-  const data = await res.json();
-  if (!res.ok) {
-    setLockStatus(data.error || "Failed to acquire lock.");
-    return;
-  }
-  state.token = data.token;
-  els.tokenValue.textContent = state.token;
-  setLockStatus("Lock acquired.");
-  renderEndpoints();
-}
-
-async function releaseLock() {
-  if (!state.token) {
-    setLockStatus("No active lock.");
-    return;
-  }
-  const res = await api("/api/stream/stop", {
-    method: "POST",
-    body: JSON.stringify({ token: state.token })
-  });
-
-  if (!res.ok) {
-    const data = await res.json();
-    setLockStatus(data.error || "Failed to release lock.");
-    return;
-  }
-  state.token = null;
-  els.tokenValue.textContent = "None";
-  setLockStatus("Lock released.");
-  renderEndpoints();
-}
-
 async function refreshLogs() {
   const res = await api("/api/logs");
   const data = await res.json();
@@ -163,11 +95,6 @@ async function refreshLogs() {
 async function refreshStatus() {
   const res = await api("/api/status");
   const data = await res.json();
-  if (!data.activeCount) {
-    setLockStatus("No active stream lock.");
-  } else {
-    setLockStatus(`Active streams: ${data.activeCount}/${data.maxStreams}`);
-  }
   if (typeof data.ffmpegAvailable === "boolean") {
     els.ffmpegStatus.textContent = data.ffmpegAvailable ? "ffmpeg: available" : "ffmpeg: missing";
   }
@@ -176,6 +103,97 @@ async function refreshStatus() {
     const maxMb = (data.cacheMaxBytes / (1024 * 1024)).toFixed(0);
     els.cacheStatus.textContent = `cache: ${mb} MB / ${maxMb} MB`;
   }
+}
+
+async function loadClients() {
+  const res = await api("/api/clients");
+  const data = await res.json();
+  const list = Array.isArray(data.clients) ? data.clients : [];
+  if (list.length === 0) {
+    els.clientList.textContent = "No clients yet.";
+    return;
+  }
+  els.clientList.innerHTML = "";
+  list.forEach((client) => {
+    const card = document.createElement("div");
+    card.className = "client-card";
+
+    const titleRow = document.createElement("div");
+    titleRow.className = "row";
+    const title = document.createElement("div");
+    title.textContent = client.name || "Client";
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = client.lastSeen ? `Last seen: ${client.lastSeen}` : "Never connected";
+    titleRow.append(title, meta);
+
+    const token = document.createElement("div");
+    token.className = "client-token";
+    token.textContent = client.token;
+
+    const links = document.createElement("div");
+    links.className = "link-row";
+    const origin = window.location.origin;
+    const m3u = `${origin}/proxy/m3u?client=${client.token}`;
+    const epg = `${origin}/proxy/epg?client=${client.token}`;
+    const m3uEl = document.createElement("code");
+    m3uEl.textContent = m3u;
+    const epgEl = document.createElement("code");
+    epgEl.textContent = epg;
+    const copyM3u = document.createElement("button");
+    copyM3u.className = "copy-btn";
+    copyM3u.textContent = "Copy M3U";
+    copyM3u.addEventListener("click", () => navigator.clipboard.writeText(m3u));
+    const copyEpg = document.createElement("button");
+    copyEpg.className = "copy-btn";
+    copyEpg.textContent = "Copy EPG";
+    copyEpg.addEventListener("click", () => navigator.clipboard.writeText(epg));
+    links.append(m3uEl, copyM3u, epgEl, copyEpg);
+
+    const active = document.createElement("div");
+    active.className = "meta";
+    active.textContent = client.activeChannel ? `Active: ${client.activeChannel}` : "Active: idle";
+
+    const actions = document.createElement("div");
+    actions.className = "client-actions";
+    const rename = document.createElement("button");
+    rename.className = "ghost";
+    rename.textContent = "Rename";
+    rename.addEventListener("click", async () => {
+      const next = prompt("Client name", client.name || "");
+      if (!next) return;
+      await api(`/api/clients/${client.token}/rename`, {
+        method: "POST",
+        body: JSON.stringify({ name: next })
+      });
+      loadClients();
+    });
+    const remove = document.createElement("button");
+    remove.className = "ghost";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", async () => {
+      await fetch(`/api/clients/${client.token}`, { method: "DELETE" });
+      loadClients();
+    });
+    actions.append(rename, remove);
+
+    card.append(titleRow, token, links, active, actions);
+    els.clientList.append(card);
+  });
+}
+
+async function createClient() {
+  const name = els.newClientName.value.trim();
+  const res = await api("/api/clients", {
+    method: "POST",
+    body: JSON.stringify({ name })
+  });
+  if (!res.ok) {
+    setStatus("Failed to create client.");
+    return;
+  }
+  els.newClientName.value = "";
+  loadClients();
 }
 
 async function uploadDenyImage() {
@@ -225,14 +243,14 @@ function refreshPreview() {
 
 els.saveConfig.addEventListener("click", saveConfig);
 els.refreshConfig.addEventListener("click", loadConfig);
-els.acquireLock.addEventListener("click", acquireLock);
-els.releaseLock.addEventListener("click", releaseLock);
 els.refreshLogs.addEventListener("click", refreshLogs);
 els.uploadDenyImage.addEventListener("click", uploadDenyImage);
 els.clearDenyImage.addEventListener("click", clearDenyImage);
 els.regenerateDenyVideo.addEventListener("click", regenerateDenyVideo);
+els.refreshClients.addEventListener("click", loadClients);
+els.createClient.addEventListener("click", createClient);
 
-renderEndpoints();
 loadConfig();
 refreshLogs();
 refreshStatus();
+loadClients();

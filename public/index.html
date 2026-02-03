@@ -71,45 +71,21 @@
         </div>
 
         <div class="card">
-          <h2>Stream Lock</h2>
-          <label>
-            Client label
-            <input id="clientLabel" type="text" placeholder="Living room web player" />
-          </label>
-          <label>
-            Client id (optional)
-            <input id="clientId" type="text" placeholder="my-player-1" />
-          </label>
           <div class="row">
-            <button id="acquireLock" class="primary">Acquire Lock</button>
-            <button id="releaseLock" class="ghost">Release</button>
+            <h2>Clients</h2>
+            <button id="refreshClients" class="ghost">Refresh</button>
           </div>
-          <div class="meta">
-            Active token: <span id="tokenValue">None</span>
-          </div>
-          <div class="meta" id="lockStatus">Status: unknown.</div>
+          <label>
+            New client name
+            <input id="newClientName" type="text" placeholder="Living room TV" />
+          </label>
+          <button id="createClient" class="primary">Create Client</button>
+          <div id="clientList" class="client-list">No clients yet.</div>
         </div>
       </section>
 
-      <section class="grid">
-        <div class="card">
-          <h2>Proxy Endpoints</h2>
-          <div class="endpoint">
-            <span>M3U</span>
-            <code id="m3uProxy">/proxy/m3u</code>
-          </div>
-          <div class="endpoint">
-            <span>EPG</span>
-            <code id="epgProxy">/proxy/epg</code>
-          </div>
-          <div class="endpoint">
-            <span>HLS (use token)</span>
-            <code id="hlsProxy">/proxy/hls?u=...&token=YOUR_TOKEN</code>
-          </div>
-          <p class="hint">M3U responses are rewritten to route channel URLs through the HLS proxy automatically.</p>
-        </div>
-
-        <div class="card logs">
+      <section>
+        <div class="card logs logs-wide">
           <div class="row">
             <h2>Recent Logs</h2>
             <button id="refreshLogs" class="ghost">Refresh</button>
