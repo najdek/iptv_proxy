@@ -33,6 +33,10 @@
             Allowed hosts (comma-separated, optional)
             <input id="allowedHosts" type="text" placeholder="cdn.example.com, stream.example.com" />
           </label>
+          <label>
+            Max concurrent streams
+            <input id="maxStreams" type="number" min="1" value="1" />
+          </label>
           <div class="row">
             <button id="saveConfig" class="primary">Save</button>
             <button id="refreshConfig" class="ghost">Reload</button>

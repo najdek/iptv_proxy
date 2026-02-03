@@ -7,6 +7,7 @@ const els = {
   m3uUrl: document.getElementById("m3uUrl"),
   epgUrl: document.getElementById("epgUrl"),
   allowedHosts: document.getElementById("allowedHosts"),
+  maxStreams: document.getElementById("maxStreams"),
   saveConfig: document.getElementById("saveConfig"),
   refreshConfig: document.getElementById("refreshConfig"),
   configStatus: document.getElementById("configStatus"),
@@ -57,6 +58,7 @@ async function loadConfig() {
   els.m3uUrl.value = data.m3uUrl || "";
   els.epgUrl.value = data.epgUrl || "";
   els.allowedHosts.value = Array.isArray(data.allowedHosts) ? data.allowedHosts.join(", ") : "";
+  els.maxStreams.value = data.maxStreams || 1;
   setStatus("Config loaded.");
 }
 
@@ -69,7 +71,8 @@ async function saveConfig() {
   const payload = {
     m3uUrl: els.m3uUrl.value.trim(),
     epgUrl: els.epgUrl.value.trim(),
-    allowedHosts
+    allowedHosts,
+    maxStreams: Number(els.maxStreams.value || 1)
   };
 
   const res = await api("/api/config", {

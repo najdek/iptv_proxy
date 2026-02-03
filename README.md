@@ -23,4 +23,5 @@ Open http://localhost:8787 to configure sources and view logs.
 
 - HLS playlists are rewritten so relative segment URLs keep working.
 - The stream lock expires after ~20 seconds of inactivity; active playback keeps it alive.
+- `maxStreams` controls concurrent streams (default `1`).
 - `allowedHosts` is optional. If empty, any upstream host is allowed.

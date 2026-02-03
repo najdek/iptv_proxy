@@ -18,7 +18,8 @@ const configPath = path.join(dataDir, "config.json");
 const defaultConfig = {
   m3uUrl: "",
   epgUrl: "",
-  allowedHosts: []
+  allowedHosts: [],
+  maxStreams: 1
 };
 
 let config = loadConfig();
@@ -26,14 +27,7 @@ let config = loadConfig();
 const logBuffer = [];
 const LOG_LIMIT = 400;
 
-const streamLock = {
-  token: null,
-  lastSeen: 0,
-  label: "",
-  clientId: "",
-  channelKey: ""
-};
-
+const streams = [];
 const LOCK_TTL_MS = 20_000;
 
 app.use(express.json({ limit: "1mb" }));
@@ -94,25 +88,27 @@ function saveConfig(nextConfig) {
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 }
 
-function isLockActive() {
-  if (!streamLock.token) return false;
-  const active = Date.now() - streamLock.lastSeen < LOCK_TTL_MS;
-  if (!active) {
-    clearLock();
+function pruneExpiredStreams() {
+  const now = Date.now();
+  for (let i = streams.length - 1; i >= 0; i -= 1) {
+    if (now - streams[i].lastSeen >= LOCK_TTL_MS) {
+      streams.splice(i, 1);
+    }
   }
-  return active;
 }
 
-function touchLock() {
-  streamLock.lastSeen = Date.now();
+function touchStream(stream) {
+  stream.lastSeen = Date.now();
 }
 
-function clearLock() {
-  streamLock.token = null;
-  streamLock.lastSeen = 0;
-  streamLock.label = "";
-  streamLock.clientId = "";
-  streamLock.channelKey = "";
+function getStreamByToken(token) {
+  return streams.find((item) => item.token === token) || null;
+}
+
+function getMaxStreams() {
+  const val = Number(config.maxStreams || 1);
+  if (!Number.isFinite(val) || val < 1) return 1;
+  return Math.floor(val);
 }
 
 function getClientId(req) {
@@ -145,57 +141,49 @@ function ensureLock(req, res, targetUrl = "") {
     res.status(401).json({ error: "Missing stream token" });
     return null;
   }
-  if (!isLockActive()) {
-    if (!streamLock.token || streamLock.token === token) {
-      streamLock.token = token;
-      streamLock.label = streamLock.label || "auto";
-      streamLock.clientId = streamLock.clientId || getClientIdentity(req);
-      streamLock.channelKey = "";
-      touchLock();
-      log("info", "Stream lock re-acquired", { clientId: streamLock.clientId });
-      if (!applyChannelLock(res, targetUrl)) return null;
-      return token;
+  pruneExpiredStreams();
+  let stream = getStreamByToken(token);
+  if (!stream) {
+    if (streams.length >= getMaxStreams()) {
+      res.status(429).json({
+        error: "Maximum concurrent streams reached",
+        activeCount: streams.length
+      });
+      return null;
     }
-    res.status(409).json({
-      error: "Stream lock is not active. Another token was used previously."
-    });
-    return null;
+    stream = {
+      token,
+      lastSeen: Date.now(),
+      label: "auto",
+      clientId: getClientIdentity(req),
+      channelKey: ""
+    };
+    streams.push(stream);
+    log("info", "Stream lock re-acquired", { clientId: stream.clientId });
   }
-  if (streamLock.token !== token) {
-    res.status(429).json({
-      error: "Another stream is active",
-      active: {
-        label: streamLock.label,
-        clientId: streamLock.clientId,
-        lastSeen: streamLock.lastSeen
-      }
-    });
-    return null;
-  }
-  if (!applyChannelLock(res, targetUrl)) return null;
-  touchLock();
+  if (!applyChannelLock(res, targetUrl, stream)) return null;
+  touchStream(stream);
   return token;
 }
 
 function autoAcquireLock(req, res, { label = "auto", clientId = "" } = {}) {
-  const active = isLockActive();
-  if (active) {
+  pruneExpiredStreams();
+  if (streams.length >= getMaxStreams()) {
     res.status(429).json({
-      error: "Another stream is active",
-      active: {
-        label: streamLock.label,
-        clientId: streamLock.clientId,
-        lastSeen: streamLock.lastSeen
-      }
+      error: "Maximum concurrent streams reached",
+      activeCount: streams.length
     });
     return null;
   }
   const token = crypto.randomUUID();
-  streamLock.token = token;
-  streamLock.label = label;
-  streamLock.clientId = clientId;
-  streamLock.channelKey = "";
-  touchLock();
+  const stream = {
+    token,
+    lastSeen: Date.now(),
+    label,
+    clientId,
+    channelKey: ""
+  };
+  streams.push(stream);
   log("info", "Stream lock auto-acquired", { label, clientId });
   return token;
 }
@@ -231,21 +219,21 @@ function getChannelKey(targetUrl) {
   }
 }
 
-function applyChannelLock(res, targetUrl) {
+function applyChannelLock(res, targetUrl, stream) {
   if (!targetUrl || !isPlaylistUrl(targetUrl)) {
     return true;
   }
   const channelKey = getChannelKey(targetUrl);
   if (!channelKey) return true;
-  if (!streamLock.channelKey) {
-    streamLock.channelKey = channelKey;
+  if (!stream.channelKey) {
+    stream.channelKey = channelKey;
     return true;
   }
-  if (streamLock.channelKey !== channelKey) {
+  if (stream.channelKey !== channelKey) {
     res.status(429).json({
       error: "Another channel is active",
       active: {
-        channelKey: streamLock.channelKey
+        channelKey: stream.channelKey
       }
     });
     return false;
@@ -350,59 +338,46 @@ app.get("/api/config", (req, res) => {
 });
 
 app.post("/api/config", (req, res) => {
-  const { m3uUrl, epgUrl, allowedHosts } = req.body || {};
+  const { m3uUrl, epgUrl, allowedHosts, maxStreams } = req.body || {};
+  const nextMaxStreams = Number(maxStreams);
   saveConfig({
     m3uUrl: m3uUrl || "",
     epgUrl: epgUrl || "",
-    allowedHosts: Array.isArray(allowedHosts) ? allowedHosts : config.allowedHosts
+    allowedHosts: Array.isArray(allowedHosts) ? allowedHosts : config.allowedHosts,
+    maxStreams: Number.isFinite(nextMaxStreams) && nextMaxStreams > 0 ? Math.floor(nextMaxStreams) : config.maxStreams
   });
   log("info", "Config updated", { m3uUrl: config.m3uUrl, epgUrl: config.epgUrl });
   res.json({ ok: true, config });
 });
 
 app.get("/api/status", (req, res) => {
+  pruneExpiredStreams();
   res.json({
-    lockActive: isLockActive(),
-    lock: streamLock
+    activeCount: streams.length,
+    maxStreams: getMaxStreams(),
+    streams
   });
 });
 
 app.post("/api/stream/start", (req, res) => {
   const { label = "", clientId = "" } = req.body || {};
-  const active = isLockActive();
-  if (active) {
-    res.status(429).json({
-      error: "Another stream is active",
-      active: {
-        label: streamLock.label,
-        clientId: streamLock.clientId,
-        lastSeen: streamLock.lastSeen
-      }
-    });
-    return;
-  }
-
-  const token = crypto.randomUUID();
-  streamLock.token = token;
-  streamLock.label = label;
-  streamLock.clientId = clientId;
-  touchLock();
-
-  log("info", "Stream lock acquired", { label, clientId });
+  const token = autoAcquireLock(req, res, { label, clientId });
+  if (!token) return;
   res.json({ token, expiresInMs: LOCK_TTL_MS });
 });
 
 app.post("/api/stream/stop", (req, res) => {
   const { token } = req.body || {};
-  if (!streamLock.token) {
+  if (!token) {
+    res.status(400).json({ error: "Token is required" });
+    return;
+  }
+  const index = streams.findIndex((item) => item.token === token);
+  if (index === -1) {
     res.json({ ok: true });
     return;
   }
-  if (token && token !== streamLock.token) {
-    res.status(403).json({ error: "Token does not match active stream" });
-    return;
-  }
-  clearLock();
+  streams.splice(index, 1);
   log("info", "Stream lock released");
   res.json({ ok: true });
 });
