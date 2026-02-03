@@ -1,0 +1,198 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap");
+
+:root {
+  color-scheme: light;
+  --bg-1: #0f2027;
+  --bg-2: #203a43;
+  --bg-3: #2c5364;
+  --panel: #f7f4f2;
+  --panel-2: #ffffff;
+  --ink: #0a0f14;
+  --muted: #55606b;
+  --accent: #ff7a59;
+  --accent-2: #ffd6c7;
+  --stroke: #e5ded8;
+  --shadow: 0 24px 70px rgba(9, 21, 30, 0.25);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Space Grotesk", "Segoe UI", sans-serif;
+  background: #0f2027;
+  color: var(--ink);
+  min-height: 100vh;
+}
+
+.bg {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(circle at 10% 20%, rgba(255, 122, 89, 0.35), transparent 40%),
+    radial-gradient(circle at 80% 10%, rgba(255, 214, 199, 0.5), transparent 40%),
+    linear-gradient(135deg, var(--bg-1), var(--bg-2), var(--bg-3));
+  z-index: -1;
+}
+
+.shell {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 56px 24px 80px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--panel);
+  border-radius: 24px;
+  padding: 28px 32px;
+  box-shadow: var(--shadow);
+  gap: 20px;
+}
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0 0 6px;
+}
+
+.hero h1 {
+  margin: 0 0 10px;
+  font-size: 32px;
+}
+
+.lede {
+  margin: 0;
+  color: var(--muted);
+  max-width: 520px;
+}
+
+.badge {
+  background: var(--accent);
+  color: #fff;
+  padding: 10px 16px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 22px;
+}
+
+.card {
+  background: var(--panel-2);
+  border-radius: 22px;
+  padding: 22px 24px;
+  box-shadow: var(--shadow);
+  border: 1px solid var(--stroke);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.card h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+input {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--stroke);
+  font-family: inherit;
+  font-size: 14px;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+button {
+  padding: 10px 16px;
+  border-radius: 12px;
+  border: none;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+button.primary {
+  background: var(--accent);
+  color: white;
+}
+
+button.ghost {
+  background: var(--accent-2);
+  color: #5a2b20;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.endpoint {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  font-size: 14px;
+}
+
+.endpoint code {
+  background: #0f2027;
+  color: #f7f4f2;
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.logs .log-list {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  background: #0a0f14;
+  color: #e0e6ed;
+  padding: 12px;
+  border-radius: 16px;
+  max-height: 240px;
+  overflow-y: auto;
+  line-height: 1.5;
+}
+
+@media (max-width: 720px) {
+  .hero {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

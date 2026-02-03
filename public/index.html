@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>IPTV Proxy Console</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="bg"></div>
+    <main class="shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Local Control Plane</p>
+          <h1>IPTV Proxy Console</h1>
+          <p class="lede">Configure your playlist sources, enforce a single active stream, and keep a clean audit trail.</p>
+        </div>
+        <div class="badge">Node Proxy</div>
+      </header>
+
+      <section class="grid">
+        <div class="card">
+          <h2>Source Config</h2>
+          <label>
+            M3U playlist URL
+            <input id="m3uUrl" type="url" placeholder="https://provider.example/playlist.m3u" />
+          </label>
+          <label>
+            EPG URL
+            <input id="epgUrl" type="url" placeholder="https://provider.example/epg.xml" />
+          </label>
+          <label>
+            Allowed hosts (comma-separated, optional)
+            <input id="allowedHosts" type="text" placeholder="cdn.example.com, stream.example.com" />
+          </label>
+          <div class="row">
+            <button id="saveConfig" class="primary">Save</button>
+            <button id="refreshConfig" class="ghost">Reload</button>
+          </div>
+          <div class="meta" id="configStatus">No config loaded yet.</div>
+        </div>
+
+        <div class="card">
+          <h2>Stream Lock</h2>
+          <label>
+            Client label
+            <input id="clientLabel" type="text" placeholder="Living room web player" />
+          </label>
+          <label>
+            Client id (optional)
+            <input id="clientId" type="text" placeholder="my-player-1" />
+          </label>
+          <div class="row">
+            <button id="acquireLock" class="primary">Acquire Lock</button>
+            <button id="releaseLock" class="ghost">Release</button>
+          </div>
+          <div class="meta">
+            Active token: <span id="tokenValue">None</span>
+          </div>
+          <div class="meta" id="lockStatus">Status: unknown.</div>
+        </div>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <h2>Proxy Endpoints</h2>
+          <div class="endpoint">
+            <span>M3U</span>
+            <code id="m3uProxy">/proxy/m3u</code>
+          </div>
+          <div class="endpoint">
+            <span>EPG</span>
+            <code id="epgProxy">/proxy/epg</code>
+          </div>
+          <div class="endpoint">
+            <span>HLS (use token)</span>
+            <code id="hlsProxy">/proxy/hls?u=...&token=YOUR_TOKEN</code>
+          </div>
+          <p class="hint">M3U responses are rewritten to route channel URLs through the HLS proxy automatically.</p>
+        </div>
+
+        <div class="card logs">
+          <div class="row">
+            <h2>Recent Logs</h2>
+            <button id="refreshLogs" class="ghost">Refresh</button>
+          </div>
+          <div id="logList" class="log-list">No logs yet.</div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
