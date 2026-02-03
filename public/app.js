@@ -8,6 +8,13 @@ const els = {
   epgUrl: document.getElementById("epgUrl"),
   allowedHosts: document.getElementById("allowedHosts"),
   maxStreams: document.getElementById("maxStreams"),
+  denyImageUrl: document.getElementById("denyImageUrl"),
+  denyImageFile: document.getElementById("denyImageFile"),
+  uploadDenyImage: document.getElementById("uploadDenyImage"),
+  clearDenyImage: document.getElementById("clearDenyImage"),
+  regenerateDenyVideo: document.getElementById("regenerateDenyVideo"),
+  denyImagePreview: document.getElementById("denyImagePreview"),
+  ffmpegStatus: document.getElementById("ffmpegStatus"),
   saveConfig: document.getElementById("saveConfig"),
   refreshConfig: document.getElementById("refreshConfig"),
   configStatus: document.getElementById("configStatus"),
@@ -59,7 +66,9 @@ async function loadConfig() {
   els.epgUrl.value = data.epgUrl || "";
   els.allowedHosts.value = Array.isArray(data.allowedHosts) ? data.allowedHosts.join(", ") : "";
   els.maxStreams.value = data.maxStreams || 1;
+  els.denyImageUrl.value = data.denyImageUrl || "";
   setStatus("Config loaded.");
+  refreshPreview();
 }
 
 async function saveConfig() {
@@ -72,7 +81,8 @@ async function saveConfig() {
     m3uUrl: els.m3uUrl.value.trim(),
     epgUrl: els.epgUrl.value.trim(),
     allowedHosts,
-    maxStreams: Number(els.maxStreams.value || 1)
+    maxStreams: Number(els.maxStreams.value || 1),
+    denyImageUrl: els.denyImageUrl.value.trim()
   };
 
   const res = await api("/api/config", {
@@ -85,6 +95,7 @@ async function saveConfig() {
     return;
   }
   setStatus("Config saved.");
+  refreshPreview();
 }
 
 async function acquireLock() {
@@ -145,11 +156,59 @@ async function refreshLogs() {
 async function refreshStatus() {
   const res = await api("/api/status");
   const data = await res.json();
-  if (!data.lockActive) {
+  if (!data.activeCount) {
     setLockStatus("No active stream lock.");
+  } else {
+    setLockStatus(`Active streams: ${data.activeCount}/${data.maxStreams}`);
+  }
+  if (typeof data.ffmpegAvailable === "boolean") {
+    els.ffmpegStatus.textContent = data.ffmpegAvailable ? "ffmpeg: available" : "ffmpeg: missing";
+  }
+}
+
+async function uploadDenyImage() {
+  const file = els.denyImageFile.files[0];
+  if (!file) {
+    setStatus("Pick an image first.");
     return;
   }
-  setLockStatus(`Active: ${data.lock.label || "Unnamed"} (${data.lock.clientId || "no id"})`);
+  const res = await fetch("/api/deny-image", {
+    method: "POST",
+    headers: {
+      "Content-Type": file.type
+    },
+    body: file
+  });
+  if (!res.ok) {
+    setStatus("Failed to upload image.");
+    return;
+  }
+  setStatus("Image uploaded.");
+  refreshPreview();
+}
+
+async function clearDenyImage() {
+  const res = await api("/api/deny-image/clear", { method: "POST" });
+  if (!res.ok) {
+    setStatus("Failed to clear upload.");
+    return;
+  }
+  setStatus("Upload cleared.");
+  refreshPreview();
+}
+
+async function regenerateDenyVideo() {
+  const res = await api("/api/deny-video/regenerate", { method: "POST" });
+  if (!res.ok) {
+    setStatus("Failed to regenerate video (ffmpeg missing?).");
+    return;
+  }
+  setStatus("Deny video regenerated.");
+}
+
+function refreshPreview() {
+  if (!els.denyImagePreview) return;
+  els.denyImagePreview.src = `/api/deny-image/preview?ts=${Date.now()}`;
 }
 
 els.saveConfig.addEventListener("click", saveConfig);
@@ -157,6 +216,9 @@ els.refreshConfig.addEventListener("click", loadConfig);
 els.acquireLock.addEventListener("click", acquireLock);
 els.releaseLock.addEventListener("click", releaseLock);
 els.refreshLogs.addEventListener("click", refreshLogs);
+els.uploadDenyImage.addEventListener("click", uploadDenyImage);
+els.clearDenyImage.addEventListener("click", clearDenyImage);
+els.regenerateDenyVideo.addEventListener("click", regenerateDenyVideo);
 
 renderEndpoints();
 loadConfig();

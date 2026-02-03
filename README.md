@@ -24,4 +24,7 @@ Open http://localhost:8787 to configure sources and view logs.
 - HLS playlists are rewritten so relative segment URLs keep working.
 - The stream lock expires after ~20 seconds of inactivity; active playback keeps it alive.
 - `maxStreams` controls concurrent streams (default `1`).
+- If the stream limit is reached, the proxy returns a tiny HLS playlist that loops `/deny/segment` (a short video generated from the image).
+- Set `denyImageUrl` to a custom HTTP(S) image or `data:` URL to customize the over-limit graphic. This requires `ffmpeg` installed.
+- You can also upload a PNG/JPEG via `POST /api/deny-image` (content-type `image/png` or `image/jpeg`).
 - `allowedHosts` is optional. If empty, any upstream host is allowed.

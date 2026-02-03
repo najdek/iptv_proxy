@@ -190,6 +190,23 @@ button:disabled {
   line-height: 1.5;
 }
 
+.preview {
+  margin-top: 8px;
+  border-radius: 16px;
+  border: 1px solid var(--stroke);
+  background: #0f2027;
+  padding: 10px;
+}
+
+.preview img {
+  display: block;
+  width: 100%;
+  border-radius: 12px;
+  max-height: 220px;
+  object-fit: contain;
+  background: #0f2027;
+}
+
 @media (max-width: 720px) {
   .hero {
     flex-direction: column;
