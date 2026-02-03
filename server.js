@@ -516,7 +516,7 @@ function isHostAllowed(targetUrl) {
   }
 }
 
-function ensureLock(req, res) {
+function ensureLock(req, res, targetUrl = "") {
   const token = getClientToken(req);
   if (!token) {
     res.status(401).json({ error: "Missing client token" });
@@ -531,6 +531,10 @@ function ensureLock(req, res) {
   let stream = getStreamByToken(token);
   if (!stream) {
     if (streams.length >= getMaxStreams()) {
+      if (isPlaylistUrl(targetUrl)) {
+        sendDenyPlaylist(req, res, token);
+        return null;
+      }
       res.status(429).json({
         error: "Maximum concurrent streams reached",
         activeCount: streams.length
@@ -1046,7 +1050,7 @@ app.get("/proxy/hls", async (req, res) => {
     res.status(400).json({ error: "Missing HLS URL" });
     return;
   }
-  const ensured = ensureLock(req, res);
+  const ensured = ensureLock(req, res, url);
   if (!ensured) return;
   const { stream, client } = ensured;
   if (!applyChannelLock(req, res, url, stream)) {
