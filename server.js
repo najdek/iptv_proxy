@@ -516,6 +516,21 @@ function isHostAllowed(targetUrl) {
   }
 }
 
+function buildUpstreamUrl(targetUrl, query = {}) {
+  try {
+    const url = new URL(targetUrl);
+    for (const [key, value] of Object.entries(query)) {
+      if (key === "u" || key === "client" || key === "token") continue;
+      if (typeof value === "string" && value.length > 0) {
+        url.searchParams.set(key, value);
+      }
+    }
+    return url.toString();
+  } catch {
+    return targetUrl;
+  }
+}
+
 function ensureLock(req, res, targetUrl = "") {
   const token = getClientToken(req);
   if (!token) {
@@ -711,14 +726,15 @@ async function proxyRequest(
   targetUrl,
   { rewrite = false, token = "", proxyBase = "", forceDiscontinuity = false } = {}
 ) {
-  if (!isHostAllowed(targetUrl)) {
+  const effectiveUrl = buildUpstreamUrl(targetUrl, req.query);
+  if (!isHostAllowed(effectiveUrl)) {
     res.status(403).json({ error: "Target host is not allowed" });
     return;
   }
 
   const cacheable = isCacheEnabled();
   const looksLikePlaylist = isPlaylistUrl(targetUrl);
-  const cacheKey = targetUrl;
+  const cacheKey = effectiveUrl;
   if (cacheable) {
     const entry = getCacheEntry(cacheKey);
     if (entry) {
@@ -750,7 +766,7 @@ async function proxyRequest(
   const retryStatuses = new Set([502, 503, 504]);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      upstream = await fetch(targetUrl, { headers });
+      upstream = await fetch(effectiveUrl, { headers });
       if (upstream.ok || !retryStatuses.has(upstream.status) || attempt === 2) {
         break;
       }
@@ -780,13 +796,13 @@ async function proxyRequest(
     } catch {
       bodyPreview = "";
     }
-    log("error", "Upstream error", { targetUrl, status, statusText, bodyPreview });
+    log("error", "Upstream error", { targetUrl: effectiveUrl, status, statusText, bodyPreview });
     res.status(status).json({ error: "Upstream error", status, statusText });
     return;
   }
 
   const contentType = upstream.headers.get("content-type") || "";
-  const isPlaylist = contentType.includes("mpegurl") || targetUrl.toLowerCase().includes(".m3u8");
+  const isPlaylist = contentType.includes("mpegurl") || effectiveUrl.toLowerCase().includes(".m3u8");
 
   if (rewrite && isPlaylist) {
     const text = await upstream.text();
@@ -795,7 +811,7 @@ async function proxyRequest(
         type: "text",
         body: text,
         contentType,
-        baseUrl: upstream.url || targetUrl,
+        baseUrl: upstream.url || effectiveUrl,
         expiresAt: Date.now() + 4_000
       });
     }
@@ -827,10 +843,10 @@ async function proxyRequest(
   } catch (err) {
     const message = String(err);
     if (message.includes("ERR_STREAM_PREMATURE_CLOSE")) {
-      log("info", "Client closed stream early", { targetUrl });
+      log("info", "Client closed stream early", { targetUrl: effectiveUrl });
       return;
     }
-    log("error", "Stream pipeline error", { targetUrl, error: message });
+    log("error", "Stream pipeline error", { targetUrl: effectiveUrl, error: message });
   }
 }
 
